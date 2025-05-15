@@ -255,7 +255,7 @@ async function createParticleBuffers() {
         // Load shader code
         let shaderCode;
         try {
-            const response = await fetch('particles.wgsl');
+            const response = await fetch('./particles.wgsl');
             if (!response.ok) {
                 throw new Error(`Failed to load shader: ${response.status} ${response.statusText}`);
             }

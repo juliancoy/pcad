@@ -55,7 +55,6 @@ fn sdf_cylinder_gradient(p: vec3<f32>, cylinder: Cylinder) -> vec3<f32> {
             sdf_finite_cylinder(p - vec3(0.0, 0.0, eps), cylinder);
     return normalize(vec3(dx, dy, dz));
 }
-
 @compute @workgroup_size(64)
 fn computeMain(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
@@ -68,60 +67,76 @@ fn computeMain(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var c = 0; c < numCylinders; c++) {
         let idx = c * 5; // Each cylinder takes 5 floats: centerX, centerY, centerZ, radius, height
         cylinderCache[c] = Cylinder(
-            vec3(cylinders[idx], cylinders[idx+1], cylinders[idx+2]),
-            cylinders[idx+3],
-            cylinders[idx+4]
+            vec3(cylinders[idx], cylinders[idx + 1], cylinders[idx + 2]),
+            cylinders[idx + 3],
+            cylinders[idx + 4]
         );
     }
 
     var p = positions[i];
     var v = velocities[i];
 
-    // Apply attraction to cylinder surfaces
     var totalForce = vec3(0.0);
     var nearestDist = 1000.0;
     var nearestColor = vec3(1.0, 1.0, 1.0);
-    
-    // Process each cylinder
+
+    // Compute total gradient for this particle
+    var gi = vec3(0.0);
     for (var c = 0; c < numCylinders; c++) {
         let cylinder = cylinderCache[c];
         let d = sdf_finite_cylinder(p, cylinder);
         let g = sdf_cylinder_gradient(p, cylinder);
-        
+        gi += g;
+
         // Add attraction force toward cylinder surface
         totalForce += -g * d * uniforms.attractionStrength;
-        
-        nearestColor = vec3(1.0, 0.0, 1.0);
+
+        // Track nearest cylinder for coloring
+        if (abs(d) < abs(nearestDist)) {
+            nearestDist = d;
+            nearestColor = vec3(1.0, 0.0, 1.0);
+        }
     }
-    
+    gi = normalize(gi);
+
     // Add repulsion from other particles
-    let repulsionRange = 0.5;
+    let repulsionRange = 0.8;
     let softening = 0.1;
-    
-    // For optimization, we'll only sample a subset of particles
     let sampleRate = 1u;
     let particleCount = arrayLength(&positions);
-    
+
     for (var j = 0u; j < particleCount; j += sampleRate) {
         if (i == j) { continue; }
-        
+
         let pj = positions[j];
         let dir = p - pj;
         let dist = length(dir);
-        
+
         if (dist < 0.0001 || dist > repulsionRange) { continue; }
-        
-        // Inverse square repulsion with a softening factor
-        totalForce += normalize(dir) * uniforms.repulsionStrength / (dist * dist + softening);
+
+        // Compute gradient normal for particle j
+        var gj = vec3(0.0);
+        for (var c = 0; c < numCylinders; c++) {
+            gj += sdf_cylinder_gradient(pj, cylinderCache[c]);
+        }
+        gj = normalize(gj);
+
+        // Stronger repulsion when normals are similar
+        let normalDot = dot(gi, gj);
+        let normalWeight = clamp(pow(normalDot, 2.0), 0.0, 1.0);
+
+        // Inverse square repulsion with normal weighting
+        let repulsion = normalize(dir) * uniforms.repulsionStrength * normalWeight / (dist * dist + softening);
+        totalForce += repulsion;
     }
-    
+
     // Add a slight attraction to origin to prevent particles from drifting too far
     let originAttractionStrength = 0.01;
     let distToOrigin = length(p);
     if (distToOrigin > 5.0) {
         totalForce -= p * originAttractionStrength;
     }
-    
+
     // Add some noise for natural movement
     let noise = vec3(
         sin(uniforms.time * 5.0 + f32(i) * 0.1) * 0.01,
@@ -129,21 +144,22 @@ fn computeMain(@builtin(global_invocation_id) id: vec3<u32>) {
         sin(uniforms.time * 3.0 + f32(i) * 0.3) * 0.01
     );
     totalForce += noise;
-    
+
     // Apply damping
     v *= 0.98;
-    
+
     // Update velocity and position
     v += totalForce * uniforms.dt;
     p += v * uniforms.dt;
-    
+
     // Update buffers
     velocities[i] = v;
     positions[i] = p;
-    
+
     // Update color based on nearest cylinder
     colors[i] = mix(colors[i], nearestColor, 0.05);
 }
+
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,

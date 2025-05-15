@@ -88,42 +88,10 @@ fn computeMain(@builtin(global_invocation_id) id: vec3<u32>) {
         let d = sdf_finite_cylinder(p, cylinder);
         let g = sdf_cylinder_gradient(p, cylinder);
         
-        let targetDist = 0.05; // desired distance from surface
-        let distError = d - targetDist;
-        
         // Add attraction force toward cylinder surface
-        totalForce += -g * distError * uniforms.attractionStrength;
+        totalForce += -g * d * uniforms.attractionStrength;
         
-        // Track nearest cylinder for coloring
-        if (abs(d) < abs(nearestDist)) {
-            nearestDist = d;
-            
-            // Generate color based on cylinder and distance
-            let hue = f32(c) / f32(numCylinders);
-            let saturation = clamp(1.0 - abs(d) * 0.2, 0.5, 1.0);
-            
-            // Simple HSV to RGB conversion
-            let h = hue * 6.0;
-            let i = floor(h);
-            let f = h - i;
-            let p = 1.0 - saturation;
-            let q = 1.0 - saturation * f;
-            let t = 1.0 - saturation * (1.0 - f);
-            
-            if (i < 1.0) {
-                nearestColor = vec3(1.0, t, p);
-            } else if (i < 2.0) {
-                nearestColor = vec3(q, 1.0, p);
-            } else if (i < 3.0) {
-                nearestColor = vec3(p, 1.0, t);
-            } else if (i < 4.0) {
-                nearestColor = vec3(p, q, 1.0);
-            } else if (i < 5.0) {
-                nearestColor = vec3(t, p, 1.0);
-            } else {
-                nearestColor = vec3(1.0, p, q);
-            }
-        }
+        nearestColor = vec3(1.0, 0.0, 1.0);
     }
     
     // Add repulsion from other particles
@@ -131,7 +99,7 @@ fn computeMain(@builtin(global_invocation_id) id: vec3<u32>) {
     let softening = 0.1;
     
     // For optimization, we'll only sample a subset of particles
-    let sampleRate = 4u;
+    let sampleRate = 1u;
     let particleCount = arrayLength(&positions);
     
     for (var j = 0u; j < particleCount; j += sampleRate) {

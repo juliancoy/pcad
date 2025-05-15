@@ -1,3 +1,23 @@
+const particleSystem = {
+    device: null,
+    canvas: null,
+    context: null,
+    pipelines: {
+        compute: null,
+        render: null
+    },
+    buffers: null,
+    bindGroups: {
+        compute: null,
+        render: null
+    },
+    uniformBuffer: null,
+    depthTexture: null,
+    particleCount: 1024,
+    running: false,
+    frameId: null
+};
+
 async function initParticleSystem() {
     if (!navigator.gpu) {
         document.body.innerHTML = "<h1 style='color:white;text-align:center;padding:2rem'>WebGPU not supported in this browser</h1>";
@@ -27,13 +47,26 @@ async function initParticleSystem() {
         alphaMode: "premultiplied" 
     });
     
-    // Particle system settings
-    const particleCount = 1024;
+    // Initialize WebGPU if not already done
+    if (!particleSystem.device) {
+        particleSystem.device = device;
+        particleSystem.canvas = canvas;
+        particleSystem.context = context;
+        particleSystem.format = format;
+    }
+    
+    // Create or update particle buffers
+    await createParticleBuffers();
+}
+
+async function createParticleBuffers() {
+    const { device, particleCount, canvas, format } = particleSystem;
+    
+    // Initialize particles
     const positions = new Float32Array(particleCount * 3);
     const velocities = new Float32Array(particleCount * 3);
     const colors = new Float32Array(particleCount * 3);
     
-    // Initialize particles
     for (let i = 0; i < particleCount; i++) {
         // Positions: distribute randomly in a sphere
         const theta = Math.random() * Math.PI * 2;
@@ -55,50 +88,79 @@ async function initParticleSystem() {
         colors[i * 3 + 2] = 0.5 + Math.cos(positions[i * 3 + 2]) * 0.5; // b
     }
     
-    // Create buffers
-    const positionBuffer = device.createBuffer({
-        size: positions.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        mappedAtCreation: true,
-    });
-    new Float32Array(positionBuffer.getMappedRange()).set(positions);
-    positionBuffer.unmap();
+    // Create or recreate buffers
+    if (particleSystem.buffers) {
+        particleSystem.buffers.position.destroy();
+        particleSystem.buffers.velocity.destroy();
+        particleSystem.buffers.color.destroy();
+        if (particleSystem.buffers.cylinder) {
+            particleSystem.buffers.cylinder.destroy();
+        }
+    }
     
-    const velocityBuffer = device.createBuffer({
-        size: velocities.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        mappedAtCreation: true,
-    });
-    new Float32Array(velocityBuffer.getMappedRange()).set(velocities);
-    velocityBuffer.unmap();
+    particleSystem.buffers = {
+        position: device.createBuffer({
+            size: positions.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: true
+        }),
+        velocity: device.createBuffer({
+            size: velocities.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: true
+        }),
+        color: device.createBuffer({
+            size: colors.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: true
+        })
+    };
+
+    // Initialize buffer data
+    new Float32Array(particleSystem.buffers.position.getMappedRange()).set(positions);
+    particleSystem.buffers.position.unmap();
     
-    const colorBuffer = device.createBuffer({
-        size: colors.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        mappedAtCreation: true,
-    });
-    new Float32Array(colorBuffer.getMappedRange()).set(colors);
-    colorBuffer.unmap();
+    new Float32Array(particleSystem.buffers.velocity.getMappedRange()).set(velocities);
+    particleSystem.buffers.velocity.unmap();
+    
+    new Float32Array(particleSystem.buffers.color.getMappedRange()).set(colors);
+    particleSystem.buffers.color.unmap();
     
     // Cylinder data: centerX, centerY, centerZ, radius, height (flattened array)
     const cylinderData = new Float32Array([
         0, 0, 0, 1.0, 2.0,    // Cylinder 1: center(0,0,0), radius 1.0, height 2.0
-        2, 0, 2, 0.5, 1.5,    // Cylinder 2: center(2,0,2), radius 0.5, height 1.5
-        -2, 0, -2, 0.75, 3.0  // Cylinder 3: center(-2,0,-2), radius 0.75, height 3.0
+        0, 0, 0, 1.0, 2.0,    // Cylinder 1: center(0,0,0), radius 1.0, height 2.0
+        0, 0, 0, 1.0, 2.0,    // Cylinder 1: center(0,0,0), radius 1.0, height 2.0
     ]);
     
-    const cylinderBuffer = device.createBuffer({
+    particleSystem.buffers.cylinder = device.createBuffer({
         size: cylinderData.byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         mappedAtCreation: true
     });
-    new Float32Array(cylinderBuffer.getMappedRange()).set(cylinderData);
-    cylinderBuffer.unmap();
+    new Float32Array(particleSystem.buffers.cylinder.getMappedRange()).set(cylinderData);
+    particleSystem.buffers.cylinder.unmap();
     
     // Create uniform buffer for camera and simulation parameters
     // Get UI control elements
+    const countSlider = document.getElementById('particle-count');
     const repulsionSlider = document.getElementById('repulsion-strength');
     const attractionSlider = document.getElementById('attraction-strength');
+    
+    // Update UI value displays
+    countSlider.addEventListener('input', async () => {
+        const newCount = parseInt(countSlider.value);
+        document.getElementById('count-value').textContent = newCount;
+        
+        if (particleSystem.running) {
+            cancelAnimationFrame(particleSystem.frameId);
+            particleSystem.running = false;
+        }
+        
+        particleSystem.particleCount = newCount;
+        await createParticleBuffers();
+        startAnimation();
+    });
     
     const uniformData = new Float32Array([
         // Camera position (xyz) and aspect ratio
@@ -112,13 +174,18 @@ async function initParticleSystem() {
         0  // _pad3 (additional padding to reach 48 bytes)
     ]);
     
-    const uniformBuffer = device.createBuffer({
+    // Create or recreate uniform buffer
+    if (particleSystem.uniformBuffer) {
+        particleSystem.uniformBuffer.destroy();
+    }
+    
+    particleSystem.uniformBuffer = device.createBuffer({
         size: uniformData.byteLength,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         mappedAtCreation: true
     });
-    new Float32Array(uniformBuffer.getMappedRange()).set(uniformData);
-    uniformBuffer.unmap();
+    new Float32Array(particleSystem.uniformBuffer.getMappedRange()).set(uniformData);
+    particleSystem.uniformBuffer.unmap();
     
     // Load shader code
     const shaderCode = await fetch('particles.wgsl').then(response => {
@@ -134,7 +201,7 @@ async function initParticleSystem() {
     });
     
     // Create compute pipeline
-    const computePipeline = device.createComputePipeline({
+    particleSystem.pipelines.compute = device.createComputePipeline({
         layout: 'auto',
         compute: { 
             module: shaderModule, 
@@ -143,7 +210,7 @@ async function initParticleSystem() {
     });
     
     // Create render pipeline
-    const renderPipeline = device.createRenderPipeline({
+    particleSystem.pipelines.render = device.createRenderPipeline({
         layout: 'auto',
         vertex: {
             module: shaderModule,
@@ -152,7 +219,7 @@ async function initParticleSystem() {
         fragment: {
             module: shaderModule,
             entryPoint: 'fragmentMain',
-            targets: [{ format }]
+            targets: [{ format: particleSystem.format }]
         },
         primitive: {
             topology: 'point-list',
@@ -168,49 +235,44 @@ async function initParticleSystem() {
         }
     });
     
-    // Create depth texture
-    let depthTexture = device.createTexture({
+    // Create or recreate depth texture
+    if (particleSystem.depthTexture) {
+        particleSystem.depthTexture.destroy();
+    }
+    
+    particleSystem.depthTexture = device.createTexture({
         size: [canvas.width, canvas.height],
         format: 'depth24plus',
         usage: GPUTextureUsage.RENDER_ATTACHMENT
     });
     
     // Create bind group for compute pipeline
-    const computeBindGroup = device.createBindGroup({
-        layout: computePipeline.getBindGroupLayout(0),
+    particleSystem.bindGroups.compute = device.createBindGroup({
+        layout: particleSystem.pipelines.compute.getBindGroupLayout(0),
         entries: [
-            { binding: 0, resource: { buffer: positionBuffer }},
-            { binding: 1, resource: { buffer: velocityBuffer }},
-            { binding: 2, resource: { buffer: colorBuffer }},
-            { binding: 3, resource: { buffer: cylinderBuffer }},
-            { binding: 4, resource: { buffer: uniformBuffer }}
+            { binding: 0, resource: { buffer: particleSystem.buffers.position }},
+            { binding: 1, resource: { buffer: particleSystem.buffers.velocity }},
+            { binding: 2, resource: { buffer: particleSystem.buffers.color }},
+            { binding: 3, resource: { buffer: particleSystem.buffers.cylinder }},
+            { binding: 4, resource: { buffer: particleSystem.uniformBuffer }}
         ]
     });
     
     // Create bind group for render pipeline
-    const renderBindGroup = device.createBindGroup({
-        layout: renderPipeline.getBindGroupLayout(0),
+    particleSystem.bindGroups.render = device.createBindGroup({
+        layout: particleSystem.pipelines.render.getBindGroupLayout(0),
         entries: [
-            { binding: 0, resource: { buffer: positionBuffer }},
-            { binding: 2, resource: { buffer: colorBuffer }},
-            { binding: 4, resource: { buffer: uniformBuffer }}
+            { binding: 0, resource: { buffer: particleSystem.buffers.position }},
+            { binding: 2, resource: { buffer: particleSystem.buffers.color }},
+            { binding: 4, resource: { buffer: particleSystem.uniformBuffer }}
         ]
     });
-    
-    // Animation state
-    let startTime = performance.now() / 1000;
-    let lastFrameTime = startTime;
-    
-    // Camera animation parameters
-    const cameraRadius = 10;
-    const cameraHeight = 3;
-    const cameraSpeed = 0.3;
     
     // Update UI value displays
     repulsionSlider.addEventListener('input', () => {
         document.getElementById('repulsion-value').textContent = repulsionSlider.value;
         device.queue.writeBuffer(
-            uniformBuffer,
+            particleSystem.uniformBuffer,
             32, // Offset to repulsionStrength
             new Float32Array([parseFloat(repulsionSlider.value)])
         );
@@ -219,29 +281,43 @@ async function initParticleSystem() {
     attractionSlider.addEventListener('input', () => {
         document.getElementById('attraction-value').textContent = attractionSlider.value;
         device.queue.writeBuffer(
-            uniformBuffer,
+            particleSystem.uniformBuffer,
             36, // Offset to attractionStrength
             new Float32Array([parseFloat(attractionSlider.value)])
         );
     });
+}
 
-    // Animation loop
+function startAnimation() {
+    if (particleSystem.running) return;
+    particleSystem.running = true;
+    
+    let startTime = performance.now() / 1000;
+    let lastFrameTime = startTime;
+    
     function frame() {
+        const { canvas, device, context, uniformBuffer, depthTexture } = particleSystem;
+        
         // Handle canvas resize if needed
         if (canvas.width !== window.innerWidth * devicePixelRatio || 
             canvas.height !== window.innerHeight * devicePixelRatio) {
-            resizeCanvas();
+            
+            canvas.width = window.innerWidth * devicePixelRatio;
+            canvas.height = window.innerHeight * devicePixelRatio;
             
             // Update aspect ratio
             device.queue.writeBuffer(
-                uniformBuffer, 
+                particleSystem.uniformBuffer, 
                 12, // Offset to aspectRatio (after cameraPos)
                 new Float32Array([canvas.width / canvas.height])
             );
             
             // Recreate depth texture
-            depthTexture.destroy();
-            depthTexture = device.createTexture({
+            if (particleSystem.depthTexture) {
+                particleSystem.depthTexture.destroy();
+            }
+            
+            particleSystem.depthTexture = device.createTexture({
                 size: [canvas.width, canvas.height],
                 format: 'depth24plus',
                 usage: GPUTextureUsage.RENDER_ATTACHMENT
@@ -255,13 +331,18 @@ async function initParticleSystem() {
         const time = now - startTime;
         
         // Animate camera position in a circular path
+        // Camera animation parameters
+        const cameraRadius = 10;
+        const cameraHeight = 3;
+        const cameraSpeed = 0.3;
+    
         const cameraX = cameraRadius * Math.sin(time * cameraSpeed);
         const cameraZ = cameraRadius * Math.cos(time * cameraSpeed);
         const cameraY = cameraHeight * Math.sin(time * cameraSpeed * 0.5);
         
         // Update uniform buffer with new camera position and time
         device.queue.writeBuffer(
-            uniformBuffer,
+            particleSystem.uniformBuffer,
             0, // Offset to start at beginning
             new Float32Array([
                 cameraX, cameraY, cameraZ, canvas.width / canvas.height,
@@ -274,9 +355,9 @@ async function initParticleSystem() {
         
         // Compute pass
         const computePass = commandEncoder.beginComputePass();
-        computePass.setPipeline(computePipeline);
-        computePass.setBindGroup(0, computeBindGroup);
-        computePass.dispatchWorkgroups(Math.ceil(particleCount / 64));
+        computePass.setPipeline(particleSystem.pipelines.compute);
+        computePass.setBindGroup(0, particleSystem.bindGroups.compute);
+        computePass.dispatchWorkgroups(Math.ceil(particleSystem.particleCount / 64));
         computePass.end();
         
         // Render pass
@@ -288,26 +369,28 @@ async function initParticleSystem() {
                 clearValue: { r: 0.0, g: 0.0, b: 0.08, a: 1.0 } // Dark blue background
             }],
             depthStencilAttachment: {
-                view: depthTexture.createView(),
+                view: particleSystem.depthTexture.createView(),
                 depthClearValue: 1.0,
                 depthLoadOp: 'clear',
                 depthStoreOp: 'store'
             }
         });
         
-        renderPass.setPipeline(renderPipeline);
-        renderPass.setBindGroup(0, renderBindGroup);
-        renderPass.draw(particleCount);
+        renderPass.setPipeline(particleSystem.pipelines.render);
+        renderPass.setBindGroup(0, particleSystem.bindGroups.render);
+        renderPass.draw(particleSystem.particleCount);
         renderPass.end();
         
         // Submit and schedule next frame
         device.queue.submit([commandEncoder.finish()]);
-        requestAnimationFrame(frame);
+        particleSystem.frameId = requestAnimationFrame(frame);
     }
     
-    // Start animation
-    requestAnimationFrame(frame);
+    particleSystem.frameId = requestAnimationFrame(frame);
 }
 
 // Initialize everything when the page loads
-window.addEventListener('load', initParticleSystem);
+window.addEventListener('load', async () => {
+    await initParticleSystem();
+    startAnimation();
+});

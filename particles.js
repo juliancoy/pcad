@@ -32,12 +32,35 @@ async function initParticleSystem() {
     const canvas = document.getElementById("webgpu-canvas");
     const context = canvas.getContext("webgpu");
     
-    // Handle canvas resize
     function resizeCanvas() {
+        const devicePixelRatio = window.devicePixelRatio || 1;
+        const canvas = particleSystem.canvas;
+    
         canvas.width = window.innerWidth * devicePixelRatio;
         canvas.height = window.innerHeight * devicePixelRatio;
+    
+        // ✅ Only update the uniform buffer if it already exists
+        if (particleSystem.uniformBuffer) {
+            particleSystem.device.queue.writeBuffer(
+                particleSystem.uniformBuffer,
+                12, // Offset to aspectRatio
+                new Float32Array([canvas.width / canvas.height])
+            );
+        }
+    
+        // ✅ Recreate depth texture to match canvas size
+        if (particleSystem.depthTexture) {
+            particleSystem.depthTexture.destroy();
+        }
+    
+        particleSystem.depthTexture = particleSystem.device.createTexture({
+            size: [canvas.width, canvas.height],
+            format: 'depth24plus',
+            usage: GPUTextureUsage.RENDER_ATTACHMENT
+        });
     }
-    resizeCanvas();
+    
+    
     window.addEventListener('resize', resizeCanvas);
     
     const format = navigator.gpu.getPreferredCanvasFormat();
@@ -55,6 +78,7 @@ async function initParticleSystem() {
         particleSystem.format = format;
     }
     
+    resizeCanvas();
     // Create or update particle buffers
     await createParticleBuffers();
 }
@@ -297,33 +321,7 @@ function startAnimation() {
     
     function frame() {
         const { canvas, device, context, uniformBuffer, depthTexture } = particleSystem;
-        
-        // Handle canvas resize if needed
-        if (canvas.width !== window.innerWidth * devicePixelRatio || 
-            canvas.height !== window.innerHeight * devicePixelRatio) {
-            
-            canvas.width = window.innerWidth * devicePixelRatio;
-            canvas.height = window.innerHeight * devicePixelRatio;
-            
-            // Update aspect ratio
-            device.queue.writeBuffer(
-                particleSystem.uniformBuffer, 
-                12, // Offset to aspectRatio (after cameraPos)
-                new Float32Array([canvas.width / canvas.height])
-            );
-            
-            // Recreate depth texture
-            if (particleSystem.depthTexture) {
-                particleSystem.depthTexture.destroy();
-            }
-            
-            particleSystem.depthTexture = device.createTexture({
-                size: [canvas.width, canvas.height],
-                format: 'depth24plus',
-                usage: GPUTextureUsage.RENDER_ATTACHMENT
-            });
-        }
-        
+                
         // Update time parameters
         const now = performance.now() / 1000;
         const dt = Math.min(0.033, now - lastFrameTime); // Cap at 30fps equivalent

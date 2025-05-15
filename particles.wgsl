@@ -123,7 +123,7 @@ fn computeMain(@builtin(global_invocation_id) id: vec3<u32>) {
 
         // Stronger repulsion when normals are similar
         let normalDot = dot(gi, gj);
-        let normalWeight = clamp(pow(normalDot, 2.0), 0.0, 1.0);
+        let normalWeight = pow(normalDot, 2.0)*5;
 
         // Inverse square repulsion with normal weighting
         let repulsion = normalize(dir) * uniforms.repulsionStrength * normalWeight / (dist * dist + softening);

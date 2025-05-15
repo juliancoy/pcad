@@ -96,11 +96,20 @@ async function initParticleSystem() {
     cylinderBuffer.unmap();
     
     // Create uniform buffer for camera and simulation parameters
+    // Get UI control elements
+    const repulsionSlider = document.getElementById('repulsion-strength');
+    const attractionSlider = document.getElementById('attraction-strength');
+    
     const uniformData = new Float32Array([
         // Camera position (xyz) and aspect ratio
         0, 0, -10, canvas.width / canvas.height,
-        // Time, dt, numCylinders, _pad
-        0, 0.016, 3, 0
+        // Time, dt, numCylinders, _pad1
+        0, 0.016, 3, 0,
+        // Force parameters and padding
+        parseFloat(repulsionSlider.value),
+        parseFloat(attractionSlider.value),
+        0, // _pad2
+        0  // _pad3 (additional padding to reach 48 bytes)
     ]);
     
     const uniformBuffer = device.createBuffer({
@@ -197,6 +206,25 @@ async function initParticleSystem() {
     const cameraHeight = 3;
     const cameraSpeed = 0.3;
     
+    // Update UI value displays
+    repulsionSlider.addEventListener('input', () => {
+        document.getElementById('repulsion-value').textContent = repulsionSlider.value;
+        device.queue.writeBuffer(
+            uniformBuffer,
+            32, // Offset to repulsionStrength
+            new Float32Array([parseFloat(repulsionSlider.value)])
+        );
+    });
+    
+    attractionSlider.addEventListener('input', () => {
+        document.getElementById('attraction-value').textContent = attractionSlider.value;
+        device.queue.writeBuffer(
+            uniformBuffer,
+            36, // Offset to attractionStrength
+            new Float32Array([parseFloat(attractionSlider.value)])
+        );
+    });
+
     // Animation loop
     function frame() {
         // Handle canvas resize if needed

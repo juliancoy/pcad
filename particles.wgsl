@@ -4,7 +4,10 @@ struct Uniforms {
     time: f32,
     dt: f32, 
     numCylinders: f32,
-    _pad: f32,
+    _pad1: f32,
+    repulsionStrength: f32,
+    attractionStrength: f32,
+    _pad2: f32,
 };
 
 struct Cylinder {
@@ -85,13 +88,11 @@ fn computeMain(@builtin(global_invocation_id) id: vec3<u32>) {
         let d = sdf_finite_cylinder(p, cylinder);
         let g = sdf_cylinder_gradient(p, cylinder);
         
-        // Stronger attraction when further from surface, weakens near surface
-        let attractionStrength = 3.0;
         let targetDist = 0.05; // desired distance from surface
         let distError = d - targetDist;
         
         // Add attraction force toward cylinder surface
-        totalForce += -g * distError * attractionStrength;
+        totalForce += -g * distError * uniforms.attractionStrength;
         
         // Track nearest cylinder for coloring
         if (abs(d) < abs(nearestDist)) {
@@ -126,7 +127,6 @@ fn computeMain(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     
     // Add repulsion from other particles
-    let repulsionStrength = 0.02;
     let repulsionRange = 0.5;
     let softening = 0.1;
     
@@ -144,7 +144,7 @@ fn computeMain(@builtin(global_invocation_id) id: vec3<u32>) {
         if (dist < 0.0001 || dist > repulsionRange) { continue; }
         
         // Inverse square repulsion with a softening factor
-        totalForce += normalize(dir) * repulsionStrength / (dist * dist + softening);
+        totalForce += normalize(dir) * uniforms.repulsionStrength / (dist * dist + softening);
     }
     
     // Add a slight attraction to origin to prevent particles from drifting too far

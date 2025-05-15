@@ -1,0 +1,44 @@
+body {
+    margin: 0;
+    overflow: hidden;
+    background: #000;
+    font-family: Arial, sans-serif;
+}
+
+canvas {
+    width: 100vw;
+    height: 100vh;
+    display: block;
+}
+
+#controls {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 15px;
+    border-radius: 8px;
+    color: white;
+    width: 250px;
+}
+
+.slider-container {
+    margin-bottom: 15px;
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 14px;
+}
+
+input[type="range"] {
+    width: 100%;
+}
+
+.value-display {
+    font-size: 12px;
+    text-align: right;
+    color: #aaa;
+    margin-top: 5px;
+}
